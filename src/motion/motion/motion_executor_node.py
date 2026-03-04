@@ -2,6 +2,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
 
+from constants import LEG_NAMES
+
 
 class MotionExecutorNode(Node):
     """Consumes motion goals and produces leg-level commands."""
@@ -15,8 +17,12 @@ class MotionExecutorNode(Node):
         # Inputs
         self.create_subscription(Float32, "motion/goal_velocity", self._on_goal_velocity, 10)
         self.create_subscription(Float32, "motion/goal_turn_rate", self._on_goal_turn_rate, 10)
-
-        # Outputs (placeholder topics for leg control)
+        
+        # Output topic for leg angles
+        for leg in LEG_NAMES[:-1]:
+            self.create_publisher(Float32, f"leg/{leg}/goal_angle", self._on_goal_)
+            
+        
         self.leg_vel_pub = self.create_publisher(Float32, "executor/leg_target_velocity", 10)
         self.leg_turn_pub = self.create_publisher(Float32, "executor/leg_target_turn_rate", 10)
 

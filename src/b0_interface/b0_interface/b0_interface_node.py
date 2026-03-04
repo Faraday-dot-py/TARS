@@ -21,7 +21,7 @@ class B0InterfaceNode(Node):
         self.create_subscription(String, "operation_mode", self._on_mode, 10)
         self.create_subscription(Bool, "enabled", self._on_enabled, 10)
 
-        self._latest_mode = "UNKNOWN"
+        self._latest_mode = "TELEOP"
         self._latest_enabled = False
 
         self.status_pub = self.create_publisher(String, "b0/status", 10)
