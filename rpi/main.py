@@ -34,12 +34,17 @@ import time
 # Hardware control files
 from mpu6050 import mpu6050
 from carriage import Carriage
+from servo import ServoController
+
+# Servo controller
+ila = ServoController(gpio_pin=18, start_angle_deg=0.0, max_speed_dps=180.0)
+ila.start()
 
 # Hard-coded network config
 ZERO_BIND_IP = "0.0.0.0"
 ZERO_BIND_PORT = 15120
 
-JETSON_IP = "10.42.0.103"       # set to your Jetson IP on the Wi-Fi network
+JETSON_IP = "10.42.0.1"       # set to your Jetson IP on the Wi-Fi network
 JETSON_TELEM_PORT = 15121       # Jetson listens here for telemetry
 
 # Behavior
@@ -67,6 +72,7 @@ def safe_disable():
 
 def handle_command(msg: dict):
     print("Got data: ", msg.items())
+    ila.set_goal(float(msg['ila_goal']))
 
 def udp_rx_loop(sock: socket.socket):
     while True:
