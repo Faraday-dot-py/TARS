@@ -1,0 +1,58 @@
+{
+    "l0":
+    {
+        "a_carr": true,
+        "a_carr_pins": [null, null, null, null],
+        "f_carr": false,
+        "f_carr_pins": [null, null, null, null],
+        
+        "ila_pin": null,
+        "ila_min": 0,
+        "ila_max": 0,
+
+        "display": false
+    },
+
+    "l1":
+    {
+        "a_carr": true,
+        "a_carr_pins": [null, null, null, null],
+        "f_carr": true,
+        "f_carr_pins": [null, null, null, null],
+        
+        "ila_pin": null,
+        "ila_min": 0,
+        "ila_max": 0,
+
+        "display": true
+    },
+
+    "l2":
+    {
+        "a_carr": true,
+        "a_carr_pins": [null, null, null, null],
+        "f_carr": true,
+        "f_carr_pins": [null, null, null, null],
+        
+        "ila_pin": null,
+        "ila_min": 0,
+        "ila_max": 0,
+
+        "display": true
+    },
+
+    "l3":
+    {
+        "a_carr": false,
+        "a_carr_pins": [null, null, null, null],
+        "f_carr": true,
+        "f_carr_pins": [null, null, null, null],
+        
+        "ila_pin": null,
+        "ila_min": 0,
+        "ila_max": 0,
+
+        "display": false
+    }
+
+}

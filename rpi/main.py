@@ -1,78 +1,124 @@
-"""
-INIT:
-- Confirm connection to jetson
-Dynamic leg identification:
-- If Active Carriage and no fixed: L1
-- If Fixed Carriage and no active: L3
-- If Both and OS is RPI: L2
-- If Both and OS is Jetson: L1
-- Configure IMUs
-- Start subscribers based on what leg was detected
-- Start publishing based on what leg was detected
-
-THREADS:
-- IMU madgewick AHRS filter
-- Stepper controller
-- Servo controller
-
-Publishers:
-- IMU data
-
-Subscribers:
-- Status
-- Active Carriage Goal (optional based off leg (L0-2))
-- Fixed Carriage Goal (optional based off leg (L1-3))
-- Angle goal (optional based off leg (L0-2))
-"""
-
 #!/usr/bin/env python3
+# ==============================================================
+#                              SETUP
+import logging
+import os
+from datetime import datetime
+
+# Set up logging
+if not os.path.exists('log'):
+    os.mkdir('log')
+
+LOG_DIR = "log"
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, str(datetime.now())),
+    level=logging.DEBUG,  # Options are: debug, info, warning, error, critical
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# General utilities
 import json
 import socket
 import threading
 import time
+import types
+logging.debug("Imported general files")
 
 # Hardware control files
-from mpu6050 import mpu6050
-from carriage import Carriage
-from servo import ServoController
+from components.carriage import Carriage
+from components.display import Display
+from components.ila import ServoController
+from components.mpu6050 import MPU6050
 
-# Servo controller
-ila = ServoController(gpio_pin=18, start_angle_deg=0.0, max_speed_dps=180.0)
-ila.start()
+logging.debug("Imported components")
 
+
+# ==============================================================
+#                           Autodetect config
+# Auto-detect the host name as the leg id
+import platform
+
+hostname = platform.node()
+MANUAL_LEG_ID = "l2"
+if MANUAL_LEG_ID:
+    LEG_ID = MANUAL_LEG_ID
+    logging.debug(f"Override leg id as [{MANUAL_LEG_ID}]")
+else:
+    LEG_ID = "l1" if hostname == "sam" else hostname
+    logging.debug(f"Autodetected leg as [{LEG_ID}]")
+
+# Load config from leg_config.json
+with open('config/leg_config.json', 'r') as f:
+    config = json.load(f)
+    config = config[LEG_ID]
+
+logging.debug(f"Loaded config for {LEG_ID}: {config}")
+
+# Setup and load components
+leg_components = types.SimpleNamespace()
+
+if config['a_carr']:
+    leg_components.a_carr = Carriage(pins=config['a_carr_pins'])
+else:
+    leg_components.a_carr = None
+
+if config['f_carr']:
+    leg_components.f_carr = Carriage(pins=config['f_carr_pins'])
+else:
+    leg_components.f_carr = None
+
+leg_components.ila = ServoController(pin=config['ila_pin'])
+leg_components.imu = MPU6050()
+
+if config['display']:
+    leg_components.display = Display()
+else:
+    leg_components.display = None
+
+# ==============================================================
+#                            Network Setup
 # Hard-coded network config
 ZERO_BIND_IP = "0.0.0.0"
 ZERO_BIND_PORT = 15120
 
-JETSON_IP = "10.42.0.1"       # set to your Jetson IP on the Wi-Fi network
+JETSON_IP = "10.42.0.1"        # set to your Jetson IP on the Wi-Fi network
 JETSON_TELEM_PORT = 15121       # Jetson listens here for telemetry
 
 # Behavior
 TELEM_HZ = 50.0
 CMD_TIMEOUT_S = 0.20            # if no command in this time, go safe
-LEG_ID = 1
 
 # Shared state
 state_lock = threading.Lock()
 last_cmd_time = 0.0
 last_cmd_seq = -1
+enabled = True
 
-# Pretend actuator targets and sensor values
-enabled = False
-target = {"hip": 0.0, "knee": 0.0, "ankle": 0.0}
-gyro = {"gx": 0.0, "gy": 0.0, "gz": 0.0}
 
+# ==============================================================
+#                     Define networking functions
 def now_s() -> float:
     return time.monotonic()
 
 def safe_disable():
     global enabled
-    # Put any real actuator disable here
     enabled = False
+    logging.warning("Watchdog triggered: disabling due to command timeout")
 
 def handle_command(msg: dict):
-    print("Got data: ", msg.items())
-    ila.set_goal(float(msg['ila_goal']))
+    global last_cmd_time, last_cmd_seq
+    logging.debug(f"Got data: {list(msg.items())}")
+
+    with state_lock:
+        last_cmd_time = now_s()
+        last_cmd_seq = msg.get('seq', last_cmd_seq)
+
+    if msg.get('ila_goal') is not None:
+        leg_components.ila.set_goal(float(msg['ila_goal']))
+    if msg.get('a_carr_goal') is not None and leg_components.a_carr is not None:
+        leg_components.a_carr.set_goal(float(msg['a_carr_goal']))
+    if msg.get('f_carr_goal') is not None and leg_components.f_carr is not None:
+        leg_components.f_carr.set_goal(float(msg['f_carr_goal']))
 
 def udp_rx_loop(sock: socket.socket):
     while True:
@@ -83,46 +129,46 @@ def udp_rx_loop(sock: socket.socket):
             continue
         handle_command(msg)
 
-def simulate_sensors_and_actuators(dt: float):
-    # Replace with real sensor read and actuator write
-    # Here we just "move" gyro a tiny bit when enabled
-    global gyro
-    with state_lock:
-        if enabled:
-            gyro["gx"] += 0.01 * dt
-            gyro["gy"] += 0.02 * dt
-            gyro["gz"] += 0.03 * dt
-        else:
-            # drift back toward 0
-            gyro["gx"] *= 0.98
-            gyro["gy"] *= 0.98
-            gyro["gz"] *= 0.98
-
 def watchdog_check():
+    global enabled
     with state_lock:
         if enabled and (now_s() - last_cmd_time) > CMD_TIMEOUT_S:
             safe_disable()
 
+
+# ==============================================================
+#                      Main telemetry TX loop
 def udp_tx_telemetry_loop(tx_sock: socket.socket):
+    global enabled
     period = 1.0 / TELEM_HZ
     next_t = now_s()
 
     seq = 0
     while True:
         t = now_s()
-        dt = max(0.0, t - next_t + period)
 
-        simulate_sensors_and_actuators(dt)
         watchdog_check()
 
         with state_lock:
+            a_carr_state = (
+                (leg_components.a_carr.get_pos(), leg_components.a_carr.get_goal())
+                if leg_components.a_carr is not None else None
+            )
+            f_carr_state = (
+                (leg_components.f_carr.get_pos(), leg_components.f_carr.get_goal())
+                if leg_components.f_carr is not None else None
+            )
+            ila_state = (leg_components.ila.get_pos(), leg_components.ila.get_goal())
+            pose = leg_components.imu.get_pose()
             msg = {
                 "type": "telem",
                 "leg_id": LEG_ID,
                 "seq": seq,
                 "enabled": enabled,
-                "target": target,
-                "gyro": gyro,
+                "pose": pose,
+                "a_carr": a_carr_state,
+                "f_carr": f_carr_state,
+                "ila": ila_state,
                 "t_monotonic": t,
             }
 
@@ -138,6 +184,9 @@ def udp_tx_telemetry_loop(tx_sock: socket.socket):
             next_t = now_s()
 
 def main():
+    global last_cmd_time
+    last_cmd_time = now_s()  # initialize so watchdog doesn't fire immediately
+
     rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     rx_sock.bind((ZERO_BIND_IP, ZERO_BIND_PORT))
 
