@@ -29,6 +29,7 @@ from components.carriage import Carriage
 from components.display import Display
 from components.ila import ServoController
 from components.mpu6050 import MPU6050
+from components.dummy import Dummy
 
 logging.debug("Imported components")
 
@@ -39,7 +40,7 @@ logging.debug("Imported components")
 import platform
 
 hostname = platform.node()
-MANUAL_LEG_ID = "l2"
+MANUAL_LEG_ID = "dummy"
 if MANUAL_LEG_ID:
     LEG_ID = MANUAL_LEG_ID
     logging.debug(f"Override leg id as [{MANUAL_LEG_ID}]")
@@ -54,26 +55,25 @@ with open('config/leg_config.json', 'r') as f:
 
 logging.debug(f"Loaded config for {LEG_ID}: {config}")
 
+ALWAYS_ON = {}
+
 # Setup and load components
-leg_components = types.SimpleNamespace()
+COMPONENT_FACTORY = {
+    'imu':     lambda cfg: MPU6050(),
+    'a_carr':  lambda cfg: Carriage(pins=cfg['a_carr_pins'], kind='active'),
+    'f_carr':  lambda cfg: Carriage(pins=cfg['f_carr_pins'], kind='fixed'),
+    'ila':     lambda cfg: ServoController(gpio_pin=cfg['ila_pin']),
+    'display': lambda cfg: Display(),
+    'dummy':   lambda cfg: Dummy(),
+}
 
-if config['a_carr']:
-    leg_components.a_carr = Carriage(pins=config['a_carr_pins'])
-else:
-    leg_components.a_carr = None
+leg_components = types.SimpleNamespace(**{
+    name: factory(config) if (name in ALWAYS_ON or config.get(name)) else None
+    for name, factory in COMPONENT_FACTORY.items()
+})
 
-if config['f_carr']:
-    leg_components.f_carr = Carriage(pins=config['f_carr_pins'])
-else:
-    leg_components.f_carr = None
-
-leg_components.ila = ServoController(pin=config['ila_pin'])
-leg_components.imu = MPU6050()
-
-if config['display']:
-    leg_components.display = Display()
-else:
-    leg_components.display = None
+print(leg_components)
+print(leg_components.dummy)
 
 # ==============================================================
 #                            Network Setup
