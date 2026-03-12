@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/ai-command.json",
+  "title": "AI Command",
+  "description": "An AI output that is either an ignore command or a respond command, optionally augmented by tools.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "const": "ignore"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional explanation for logging or debugging."
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "content"
+      ],
+      "properties": {
+        "command": {
+          "const": "respond"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The message the AI should send to the user."
+        },
+        "tools": {
+          "type": "array",
+          "description": "Optional tool calls to augment the response.",
+          "items": {
+            "$ref": "#/$defs/toolCall"
+          },
+          "maxItems": 10
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "toolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool"
+      ],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": [
+            "webSearch",
+            "modifyMemory",
+            "listenForFollowUp"
+          ]
+        },
+        "input": {
+          "type": "object",
+          "description": "Tool-specific input payload."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "tool": {
+                "const": "webSearch"
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          },
+          "then": {
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "$ref": "#/$defs/webSearchInput"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tool": {
+                "const": "modifyMemory"
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          },
+          "then": {
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "$ref": "#/$defs/modifyMemoryInput"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tool": {
+                "const": "listenForFollowUp"
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          },
+          "then": {
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "$ref": "#/$defs/listenForFollowUpInput"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "webSearchInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recencyDays": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5
+        }
+      }
+    },
+    "modifyMemoryInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "key"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "set",
+            "delete"
+          ]
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "set"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "required": [
+              "value"
+            ]
+          }
+        }
+      ]
+    },
+    "listenForFollowUpInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Parameters controlling how the system waits for a user follow-up.",
+      "properties": {
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 7200,
+          "description": "How long to wait before stopping the listen."
+        },
+        "stopOnUserMessage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop listening as soon as a user message is received."
+        },
+        "onTimeoutCommand": {
+          "type": "string",
+          "enum": [
+            "ignore",
+            "respond"
+          ],
+          "default": "ignore",
+          "description": "What the orchestrator should do if the timeout is reached with no follow-up."
+        }
+      }
+    }
+  }
+}
