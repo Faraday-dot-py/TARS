@@ -1,118 +1,97 @@
+import json
 import time
-from servo_driver import set_servo_angle
 
-OUTER = 0
-INNER = 1
-HIP = 2
-ROLL = 3
-PITCH = 4
-YAW = 5
+from servo import Servo
 
-LEG_SERVOS = [
-    (0, 1, 2),
-    (3, 4, 5),
-    (6, 7, 8),
-    (9, 10, 11)
-]
+F = 0
+A = 1
+I = 2
+R = 3
+P = 4
+Y = 5
 
-def set_leg_goal(leg_index, outer, inner, hip):
-    outer_servo, inner_servo, hip_servo = LEG_SERVOS[leg_index]
-    print(f"Leg {leg_index}: outer={outer} inner={inner} hip={hip}")
-    set_servo_angle(outer_servo, outer)
-    set_servo_angle(inner_servo, inner)
-    set_servo_angle(hip_servo, hip)
 
-def do_step(state_map):
-    print("\nExecuting step\n")
+def load_config():
+    with open("config.json", "r") as f:
+        return json.load(f)
+
+
+def create_servos(config):
+    legs = config["legs"]
+
+    servos = []
+
+    for leg_name in ["l0", "l1", "l2", "l3"]:
+        leg = legs[leg_name]
+
+        leg_servos = {
+            "F": Servo(pin=leg["a_car_pins"][0]),
+            "A": Servo(pin=leg["a_car_pins"][1]),
+            "I": Servo(pin=leg["a_car_pins"][2]) if leg["hip"] else None
+        }
+
+        servos.append(leg_servos)
+
+    return servos
+
+
+def do_step(state_map, servos):
     for leg_index, row in enumerate(state_map):
-        outer = row[OUTER]
-        inner = row[INNER]
-        hip = row[HIP]
-        set_leg_goal(leg_index, outer, inner, hip)
-    roll = state_map[0][ROLL]
-    pitch = state_map[0][PITCH]
-    yaw = state_map[0][YAW]
-    print(f"Orientation target -> Roll:{roll} Pitch:{pitch} Yaw:{yaw}")
-    time.sleep(1)
-    print("Step complete\n")
+        f_goal = row[F]
+        a_goal = row[A]
+        i_goal = row[I]
 
-def print_state_map(state_map):
-    print("\nCurrent State Map\n")
-    print("Leg | Outer Inner Hip Roll Pitch Yaw")
-    print("-------------------------------------")
-    for i, row in enumerate(state_map):
-        print(
-            f"{i}   | "
-            f"{row[0]:>5} "
-            f"{row[1]:>5} "
-            f"{row[2]:>5} "
-            f"{row[3]:>4} "
-            f"{row[4]:>5} "
-            f"{row[5]:>3}"
-        )
-    print()
+        servos[leg_index]["F"].set_goal(f_goal)
+        servos[leg_index]["A"].set_goal(a_goal)
 
-def input_row(leg_index):
-    while True:
-        cmd = input(f"Enter values for leg {leg_index} (outer inner hip roll pitch yaw): ")
-        parts = cmd.split()
-        if len(parts) != 6:
-            print("Need 6 numbers")
-            continue
-        try:
-            row = [float(x) for x in parts]
-            return row
-        except:
-            print("Invalid input")
+        if servos[leg_index]["I"] is not None:
+            servos[leg_index]["I"].set_goal(i_goal)
 
-def input_state_map():
-    state_map = []
-    print("\nEnter new state map")
-    for i in range(4):
-        row = input_row(i)
-        state_map.append(row)
-    return state_map
 
-def default_state():
-    return [
+def update_servos(servos):
+    for leg in servos:
+        for actuator in leg.values():
+            if actuator is not None:
+                actuator.update()
+
+
+def cleanup_servos(servos):
+    for leg in servos:
+        for actuator in leg.values():
+            if actuator is not None:
+                actuator.cleanup()
+
+
+def goals_reached(servos, tolerance=1.0):
+    for leg in servos:
+        for actuator in leg.values():
+            if actuator is None:
+                continue
+            if abs(actuator._goal - actuator._current) > tolerance:
+                return False
+    return True
+
+
+def main():
+    config = load_config()
+    servos = create_servos(config)
+
+    state_map = [
         [90, 90, 90, 0, 0, 0],
         [90, 90, 90, 0, 0, 0],
         [90, 90, 90, 0, 0, 0],
         [90, 90, 90, 0, 0, 0]
     ]
 
-def main():
-    state_map = default_state()
-    while True:
-        print("Robot Controller")
-        print("----------------")
-        print("1 -> Show state map")
-        print("2 -> Enter new state map")
-        print("3 -> Execute step")
-        print("4 -> Edit one leg")
-        print("5 -> Quit")
-        cmd = input("Select option: ")
-        if cmd == "1":
-            print_state_map(state_map)
-        elif cmd == "2":
-            state_map = input_state_map()
-        elif cmd == "3":
-            print_state_map(state_map)
-            do_step(state_map)
-        elif cmd == "4":
-            try:
-                leg = int(input("Leg index (0-3): "))
-                if leg < 0 or leg > 3:
-                    print("Invalid leg")
-                    continue
-                state_map[leg] = input_row(leg)
-            except:
-                print("Invalid input")
-        elif cmd == "5":
-            print("Exiting controller")
-            break
-        else:
-            print("Invalid option")
+    do_step(state_map, servos)
+
+    try:
+        while not goals_reached(servos):
+            update_servos(servos)
+            time.sleep(0.02)
+    finally:
+        cleanup_servos(servos)
+
 
 if __name__ == "__main__":
     main()
