@@ -25,9 +25,9 @@ import types
 logging.debug("Imported general files")
 
 # Hardware control files
-from components.carriage import Carriage
-from components.display import Display
-from components.ila import ServoController
+# from components.carriage import Carriage
+# from components.display import Display
+# from components.hip import ServoController
 from components.mpu6050 import MPU6050
 
 logging.debug("Imported components")
@@ -57,23 +57,23 @@ logging.debug(f"Loaded config for {LEG_ID}: {config}")
 # Setup and load components
 leg_components = types.SimpleNamespace()
 
-if config['a_carr']:
-    leg_components.a_carr = Carriage(pins=config['a_carr_pins'])
-else:
-    leg_components.a_carr = None
+# if config['a_carr']:
+#     leg_components.a_carr = Carriage(pins=config['a_carr_pins'])
+# else:
+#     leg_components.a_carr = None
 
-if config['f_carr']:
-    leg_components.f_carr = Carriage(pins=config['f_carr_pins'])
-else:
-    leg_components.f_carr = None
+# if config['f_carr']:
+#     leg_components.f_carr = Carriage(pins=config['f_carr_pins'])
+# else:
+#     leg_components.f_carr = None
 
-leg_components.ila = ServoController(pin=config['ila_pin'])
+# leg_components.hip = ServoController(pin=config['hip_pin'])
 leg_components.imu = MPU6050()
 
-if config['display']:
-    leg_components.display = Display()
-else:
-    leg_components.display = None
+# if config['display']:
+#     leg_components.display = Display()
+# else:
+#     leg_components.display = None
 
 # ==============================================================
 #                            Network Setup
@@ -94,6 +94,14 @@ last_cmd_time = 0.0
 last_cmd_seq = -1
 enabled = True
 
+# ==============================================================
+#                       Some helper functions
+def pose_to_dict(pose):
+    return {
+        'roll': pose.roll,
+        'pitch': pose.pitch,
+        'yaw': pose.yaw
+    }
 
 # ==============================================================
 #                     Define networking functions
@@ -112,13 +120,16 @@ def handle_command(msg: dict):
     with state_lock:
         last_cmd_time = now_s()
         last_cmd_seq = msg.get('seq', last_cmd_seq)
+    
 
-    if msg.get('ila_goal') is not None:
-        leg_components.ila.set_goal(float(msg['ila_goal']))
-    if msg.get('a_carr_goal') is not None and leg_components.a_carr is not None:
-        leg_components.a_carr.set_goal(float(msg['a_carr_goal']))
-    if msg.get('f_carr_goal') is not None and leg_components.f_carr is not None:
-        leg_components.f_carr.set_goal(float(msg['f_carr_goal']))
+    
+
+    # if msg.get('hip_goal') is not None:
+    #     leg_components.hip.set_goal(float(msg['hip_goal']))
+    # if msg.get('a_carr_goal') is not None and leg_components.a_carr is not None:
+    #     leg_components.a_carr.set_goal(float(msg['a_carr_goal']))
+    # if msg.get('f_carr_goal') is not None and leg_components.f_carr is not None:
+    #     leg_components.f_carr.set_goal(float(msg['f_carr_goal']))
 
 def udp_rx_loop(sock: socket.socket):
     while True:
@@ -150,25 +161,25 @@ def udp_tx_telemetry_loop(tx_sock: socket.socket):
         watchdog_check()
 
         with state_lock:
-            a_carr_state = (
-                (leg_components.a_carr.get_pos(), leg_components.a_carr.get_goal())
-                if leg_components.a_carr is not None else None
-            )
-            f_carr_state = (
-                (leg_components.f_carr.get_pos(), leg_components.f_carr.get_goal())
-                if leg_components.f_carr is not None else None
-            )
-            ila_state = (leg_components.ila.get_pos(), leg_components.ila.get_goal())
+            # a_carr_state = (
+            #     (leg_components.a_carr.get_pos(), leg_components.a_carr.get_goal())
+            #     if leg_components.a_carr is not None else None
+            # )
+            # f_carr_state = (
+            #     (leg_components.f_carr.get_pos(), leg_components.f_carr.get_goal())
+            #     if leg_components.f_carr is not None else None
+            # )
+            # hip_state = (leg_components.hip.get_pos(), leg_components.hip.get_goal())
             pose = leg_components.imu.get_pose()
             msg = {
-                "type": "telem",
+                "type": "l2/imu",
                 "leg_id": LEG_ID,
                 "seq": seq,
                 "enabled": enabled,
-                "pose": pose,
-                "a_carr": a_carr_state,
-                "f_carr": f_carr_state,
-                "ila": ila_state,
+                "pose": pose_to_dict(pose),
+                # "a_carr": a_carr_state,
+                # "f_carr": f_carr_state,
+                # "hip": hip_state,
                 "t_monotonic": t,
             }
 
