@@ -1,0 +1,14 @@
+; Marlin PlatformIO environment guidance for the connected board.
+; This is a snippet, not a standalone full platformio.ini.
+;
+; Evidence status:
+; - Validated from direct hardware inspection: board MCU is GD32F303RET6.
+; - Inference: use the Creality GD32 4.2.2 environment supported by the chosen Marlin version.
+;
+; Apply this to the matching upstream Marlin tree once that tree is selected.
+
+[platformio]
+default_envs = GD32F303RE_creality
+
+; If the chosen Marlin branch uses a different exact env name for Creality 4.2.2 GD32,
+; prefer the upstream-supported name from that branch rather than forcing this one.

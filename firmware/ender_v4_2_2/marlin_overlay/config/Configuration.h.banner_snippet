@@ -1,0 +1,20 @@
+#pragma once
+
+/**
+ * Banner-only bring-up intent for a Marlin-based custom image.
+ *
+ * Validated from direct hardware behavior:
+ * - stock firmware uses the CH340 serial path at 115200 baud.
+ *
+ * Engineering judgment:
+ * - keep the printer feature surface as close to upstream defaults as possible
+ *   for the first custom boot, and add only the smallest possible custom serial marker.
+ */
+
+#define BAUDRATE 115200
+#define CUSTOM_MACHINE_NAME "TARS Banner Bringup"
+
+/*
+ * Keep the rest of the board definition aligned with the exact upstream example
+ * chosen for the connected Creality 4.2.2 GD32 board.
+ */

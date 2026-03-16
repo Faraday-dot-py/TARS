@@ -2,3 +2,25 @@ build
 install
 log
 rpi/components/__pycache__/__init__.cpython-310.pyc
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# ROS / colcon build outputs
+build/
+install/
+log/
+src/build/
+src/install/
+src/log/
+
+# Python virtualenv / local package artifacts under legacy rpi workspace
+rpi/lib/
+rpi/log/
+
+# Firmware build artifacts
+firmware/ender_v4_2_2/build/
+firmware/reference/__pycache__/
+firmware/marlin_upstream/.pio/
+firmware/marlin_upstream/buildroot/share/PlatformIO/scripts/__pycache__/

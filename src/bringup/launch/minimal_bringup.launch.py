@@ -1,19 +1,27 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
     """Launch a minimal software stack suitable for basic system tests."""
 
+    use_serial_bridge = LaunchConfiguration("use_serial_leg_bridge")
+    serial_leg_id = LaunchConfiguration("serial_leg_id")
+    serial_device = LaunchConfiguration("serial_device")
+
     nodes = [
-        # Top-level controller
+        DeclareLaunchArgument("use_serial_leg_bridge", default_value="false"),
+        DeclareLaunchArgument("serial_leg_id", default_value="L0"),
+        DeclareLaunchArgument("serial_device", default_value="/dev/ttyACM0"),
         Node(
             package="robot_controller",
             executable="robot_controller",
             name="robot_controller",
             output="screen",
         ),
-        # Motion stack
         Node(
             package="motion",
             executable="motion_planner",
@@ -26,14 +34,12 @@ def generate_launch_description() -> LaunchDescription:
             name="motion_executor",
             output="screen",
         ),
-        # State estimation
         Node(
             package="state_estimation",
             executable="leg_pose_estimator",
             name="leg_pose_estimator",
             output="screen",
         ),
-        # Base station interface
         Node(
             package="b0_interface",
             executable="b0_interface",
@@ -42,7 +48,6 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # Leg controllers for L0–L3
     for leg_id in ("L0", "L1", "L2", "L3"):
         nodes.append(
             Node(
@@ -55,6 +60,19 @@ def generate_launch_description() -> LaunchDescription:
             )
         )
 
+    nodes.append(
+        Node(
+            package="leg_transport",
+            executable="serial_leg_bridge",
+            namespace=serial_leg_id,
+            name="serial_leg_bridge",
+            parameters=[
+                {"leg_id": serial_leg_id},
+                {"device_path": serial_device},
+            ],
+            condition=IfCondition(use_serial_bridge),
+            output="screen",
+        )
+    )
+
     return LaunchDescription(nodes)
-
-

@@ -1,0 +1,11 @@
+#pragma once
+
+/*
+ * Advanced configuration intent for banner-only bring-up.
+ *
+ * Keep runtime changes minimal.
+ * Avoid enabling extra transports or features until a custom serial banner is proven.
+ */
+
+#define HOST_KEEPALIVE_FEATURE
+#define DEFAULT_KEEPALIVE_INTERVAL 2
