@@ -9,7 +9,14 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", ["launch/minimal_bringup.launch.py"]),
+        (
+            "share/" + package_name + "/launch",
+            [
+                "launch/minimal_bringup.launch.py",
+                "launch/pico_ender_connection_probe.launch.py",
+                "launch/pico_one_leg_bringup.launch.py",
+            ],
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=False,
@@ -20,4 +27,3 @@ setup(
     tests_require=["pytest"],
     entry_points={"console_scripts": []},
 )
-

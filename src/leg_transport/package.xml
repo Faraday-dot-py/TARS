@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>leg_transport</name>
+  <version>0.0.0</version>
+  <description>Shared leg transport framing, watchdog, and semantic state models.</description>
+  <maintainer email="todo@example.com">TARS Team</maintainer>
+  <license>MIT</license>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

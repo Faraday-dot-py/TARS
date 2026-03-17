@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ender_stepper_transport</name>
+  <version>0.0.0</version>
+  <description>Pico <-> Ender stepper transport contract and validation helpers.</description>
+  <maintainer email="todo@example.com">TARS Team</maintainer>
+  <license>MIT</license>
+
+  <depend>leg_transport</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
