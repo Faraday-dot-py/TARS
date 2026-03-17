@@ -1,7 +1,12 @@
 from mpu6050 import MPU6050
 import numpy as np
-import time
-from ahrs.filters import madgwick
+from ahrs.filters import Madgwick
+
+class FakeMPU6050:
+    def read_accel_g(self):
+        return [0.0, 0.0, 1.0]  # gravity pointing down
+    def read_gyro_dps(self):
+        return [0.0, 0.0, 0.0]  # no rotation
 
 
 class IMU:
@@ -15,8 +20,8 @@ class IMU:
         self.sensor_id   = sensor_id
         self.sample_rate = sample_rate
 
-        self._sensor = MPU6050(address)
-        self._filter = madgwick(frequency=sample_rate, beta=beta)
+        self._sensor = FakeMPU6050() if address == 0 else MPU6050(address)
+        self._filter = Madgwick(frequency=sample_rate, beta=beta)
 
         # Filter needs an initial quaternion to update from
         self._q = np.array([1.0, 0.0, 0.0, 0.0])
@@ -37,3 +42,12 @@ class IMU:
 
     def packet(self) -> str:
         return f"{self.sensor_id},{self.w:.4f},{self.x:.4f},{self.y:.4f},{self.z:.4f}"
+
+
+if __name__ == "__main__":
+    id = 1
+    address = 0
+    sensor_guy = IMU(id, address)
+    for _ in range(100):
+        sensor_guy.update()
+    print(sensor_guy.packet())
