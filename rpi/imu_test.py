@@ -1,7 +1,7 @@
 import time
-from mpu6050 import mpu6050
+from mpu6050 import MPU6050
 
-sensor = mpu6050()
+sensor = MPU6050()
 
 print("MPU6050 initialized successfully!")
 print("Reading data... Press Ctrl+C to stop.\n")
