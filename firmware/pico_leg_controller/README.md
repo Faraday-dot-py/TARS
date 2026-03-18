@@ -47,17 +47,44 @@ UDP bridge listening on port 15120
 ## Behavior
 
 - `PING` over UDP returns `PICO:PONG`.
-- Any other UDP payload is sent as a line over UART to the Ender board.
+- Compact Ender commands such as `S050100E` are passed straight through over UART.
+- Human-friendly UDP commands are translated to compact Ender commands.
 - Any UART line from the Ender board is returned over UDP to the last sender.
+
+Supported UDP commands:
+
+- `ENABLE` -> `A1E`
+- `DISABLE` -> `A0E`
+- `STATUS` -> `Q0E`
+- `BOARD` -> `B0E`
+- `LIMITS` -> `L0E`
+- `MODE ABS` -> `M0E`
+- `MODE REL` -> `M1E`
+- `RATE 120` -> `R120E`
+- `MOVE 50 100` -> `S050100E`
+- `INNER 50 OUTER 100` -> `S050100E`
+- `HOME X` / `HOME Y` / `HOME BOTH` -> `H10E` / `H01E` / `H11E`
+- `ZERO X` / `ZERO Y` / `ZERO BOTH` -> `Z10E` / `Z01E` / `Z11E`
+- raw compact strings like `S050100E`
+- raw bench commands like `M114` or `G1 X20 Y20 R100`
 
 ## Bench Test
 
 ```bash
 python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> PING
-python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> M115
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> ENABLE
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> STATUS
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> RATE\ 120
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> MOVE\ 050\ 100
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> LIMITS
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> BOARD
 ```
 
 Expected:
 
 - `PING` returns `PICO:PONG`
-- `M115` returns a Marlin line containing `FIRMWARE_NAME`
+- `ENABLE` returns `ok`
+- `STATUS` returns X/Y position and target info plus fault/endstop state
+- `MOVE 050 100` returns `ok` and the Ender should begin stepping
+- `LIMITS` returns the X/Y endstop state
+- `BOARD` returns the Ender firmware pin mapping summary

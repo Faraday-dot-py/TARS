@@ -2,3 +2,12 @@ build
 install
 log
 rpi/components/__pycache__/__init__.cpython-310.pyc
+firmware/reference/__pycache__/reference_firmware.cpython-310.pyc
+__pycache__/
+*.pyc
+*.pyo
+src/build/
+src/install/
+firmware/ender_stepper_controller/build/
+firmware/pico_leg_controller/.pio/
+firmware/marlin_upstream/.pio/

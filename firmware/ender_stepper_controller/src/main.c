@@ -89,6 +89,8 @@ typedef struct {
 #define X_DIR_PIN 9u
 #define Y_STEP_PIN 8u
 #define Y_DIR_PIN 7u
+#define X_STOP_PIN 5u
+#define Y_STOP_PIN 6u
 #define XY_ENABLE_PIN 3u
 #define UART_TX_PIN 10u
 #define UART_RX_PIN 11u
@@ -112,6 +114,7 @@ typedef struct {
 #define BINARY_FRAME_MAX 64u
 #define STATUS_PERIOD_MS 100u
 #define DEFAULT_RATE_HZ 400u
+#define DEFAULT_HOMING_RATE_HZ 150u
 #define ASCII_WATCHDOG_TIMEOUT_MS 5000u
 
 typedef struct {
@@ -123,6 +126,7 @@ typedef struct {
   int32_t target_steps;
   uint32_t step_interval_us;
   uint32_t last_step_time_us;
+  int8_t homing_direction;
   ender_stepper_mode_t mode;
 } axis_state_t;
 
@@ -135,6 +139,8 @@ typedef struct {
   uint32_t last_status_ms;
   uint32_t last_sequence;
   uint32_t fault_bits;
+  uint16_t default_rate_hz;
+  uint16_t homing_rate_hz;
   ender_stepper_command_t latest_command;
   ender_stepper_status_t latest_status;
   axis_state_t axis_1;
@@ -193,6 +199,16 @@ static void gpio_config_input_floating(gpio_regs_t *port, uint8_t pin) {
   *config = value;
 }
 
+static void gpio_config_input_pullup(gpio_regs_t *port, uint8_t pin) {
+  volatile uint32_t *config = pin < 8u ? &port->CRL : &port->CRH;
+  const uint8_t shift = (uint8_t)((pin & 0x7u) * 4u);
+  uint32_t value = *config;
+  value &= ~(0xFu << shift);
+  value |= (0x8u << shift);  // input with pull-up / pull-down
+  *config = value;
+  port->BSRR = PIN_MASK(pin);  // pull-up
+}
+
 static void gpio_config_alt_pushpull(gpio_regs_t *port, uint8_t pin) {
   volatile uint32_t *config = pin < 8u ? &port->CRL : &port->CRH;
   const uint8_t shift = (uint8_t)((pin & 0x7u) * 4u);
@@ -208,6 +224,10 @@ static void gpio_write(gpio_regs_t *port, uint8_t pin, bool high) {
   } else {
     port->BRR = PIN_MASK(pin);
   }
+}
+
+static bool gpio_read(gpio_regs_t *port, uint8_t pin) {
+  return (port->IDR & PIN_MASK(pin)) != 0u;
 }
 
 static void uart3_write_byte(uint8_t value) {
@@ -305,6 +325,9 @@ static void write_i32_le(uint8_t *dst, int32_t value) {
 static void axis_apply_command(axis_state_t *axis, const ender_stepper_axis_command_t *command) {
   axis->mode = command->mode;
   axis->target_steps = command->target_steps;
+  if (command->homing_direction != 0) {
+    axis->homing_direction = command->homing_direction > 0 ? 1 : -1;
+  }
   if (command->max_step_rate_hz > 0u) {
     axis->step_interval_us = 1000000u / command->max_step_rate_hz;
     if (axis->step_interval_us == 0u) {
@@ -358,6 +381,18 @@ static void controller_publish_status_binary(void) {
   }
 }
 
+static bool controller_x_limit_triggered(void) {
+  return !gpio_read(GPIOA, X_STOP_PIN);
+}
+
+static bool controller_y_limit_triggered(void) {
+  return !gpio_read(GPIOA, Y_STOP_PIN);
+}
+
+static const char *controller_motion_mode_text(void) {
+  return g_controller.relative_mode ? "REL" : "ABS";
+}
+
 static void controller_publish_status_text(void) {
   uart3_write_text("X:");
   uart3_write_i32(g_controller.axis_1.position_steps);
@@ -373,6 +408,38 @@ static void controller_publish_status_text(void) {
   uart3_write_u32(g_controller.safe_stop ? 1u : 0u);
   uart3_write_text(" FAULT:");
   uart3_write_u32(g_controller.fault_bits);
+  uart3_write_text(" XL:");
+  uart3_write_u32(controller_x_limit_triggered() ? 1u : 0u);
+  uart3_write_text(" YL:");
+  uart3_write_u32(controller_y_limit_triggered() ? 1u : 0u);
+  uart3_write_text(" RATE:");
+  uart3_write_u32(g_controller.default_rate_hz);
+  uart3_write_text(" HOME_RATE:");
+  uart3_write_u32(g_controller.homing_rate_hz);
+  uart3_write_text(" MODE:");
+  uart3_write_text(controller_motion_mode_text());
+  uart3_write_text(" XSTATE:");
+  uart3_write_u32((uint32_t)g_controller.axis_1.mode);
+  uart3_write_text(" YSTATE:");
+  uart3_write_u32((uint32_t)g_controller.axis_2.mode);
+  uart3_write_text("\r\n");
+}
+
+static void controller_publish_board_info_text(void) {
+  uart3_write_text("BOARD:TARS_ENDER_STEPPER_CONTROLLER");
+  uart3_write_text(" FW:20260318");
+  uart3_write_text(" UART:USART3@115200");
+  uart3_write_text(" STEP:X(PC2,PB9) Y(PB8,PB7)");
+  uart3_write_text(" LIMIT:X(PA5) Y(PA6)");
+  uart3_write_text(" ENABLE:PC3");
+  uart3_write_text("\r\n");
+}
+
+static void controller_publish_limit_text(void) {
+  uart3_write_text("XL:");
+  uart3_write_u32(controller_x_limit_triggered() ? 1u : 0u);
+  uart3_write_text(" YL:");
+  uart3_write_u32(controller_y_limit_triggered() ? 1u : 0u);
   uart3_write_text("\r\n");
 }
 
@@ -414,6 +481,31 @@ static int32_t parse_signed_value(const char *line, char key, bool *found) {
   return 0;
 }
 
+static size_t text_length(const char *text) {
+  size_t length = 0u;
+  while (text[length] != '\0') {
+    ++length;
+  }
+  return length;
+}
+
+static bool is_digit_char(char value) {
+  return value >= '0' && value <= '9';
+}
+
+static bool parse_fixed_u16(const char *text, size_t offset, size_t digits, uint16_t *out_value) {
+  uint16_t value = 0u;
+  for (size_t i = 0; i < digits; ++i) {
+    const char current = text[offset + i];
+    if (!is_digit_char(current)) {
+      return false;
+    }
+    value = (uint16_t)(value * 10u + (uint16_t)(current - '0'));
+  }
+  *out_value = value;
+  return true;
+}
+
 static void controller_apply_move(int32_t x_value, bool has_x, int32_t y_value, bool has_y, uint32_t rate_hz) {
   if (has_x) {
     if (g_controller.relative_mode) {
@@ -436,8 +528,135 @@ static void controller_apply_move(int32_t x_value, bool has_x, int32_t y_value, 
   }
 }
 
+static void controller_schedule_home(bool home_x, bool home_y) {
+  if (home_x) {
+    g_controller.axis_1.mode = ENDER_STEPPER_HOME_TO_LIMIT;
+    g_controller.axis_1.step_interval_us = 1000000u / g_controller.homing_rate_hz;
+    g_controller.axis_1.homing_direction = g_controller.axis_1.homing_direction < 0 ? -1 : 1;
+    if (controller_x_limit_triggered()) {
+      g_controller.axis_1.position_steps = 0;
+      g_controller.axis_1.target_steps = 0;
+      g_controller.axis_1.mode = ENDER_STEPPER_HOLD;
+    }
+  }
+
+  if (home_y) {
+    g_controller.axis_2.mode = ENDER_STEPPER_HOME_TO_LIMIT;
+    g_controller.axis_2.step_interval_us = 1000000u / g_controller.homing_rate_hz;
+    g_controller.axis_2.homing_direction = g_controller.axis_2.homing_direction < 0 ? -1 : 1;
+    if (controller_y_limit_triggered()) {
+      g_controller.axis_2.position_steps = 0;
+      g_controller.axis_2.target_steps = 0;
+      g_controller.axis_2.mode = ENDER_STEPPER_HOLD;
+    }
+  }
+}
+
+static void controller_zero_axes(bool zero_x, bool zero_y) {
+  if (zero_x) {
+    g_controller.axis_1.position_steps = 0;
+    g_controller.axis_1.target_steps = 0;
+  }
+  if (zero_y) {
+    g_controller.axis_2.position_steps = 0;
+    g_controller.axis_2.target_steps = 0;
+  }
+}
+
+static bool controller_process_compact_command(const char *line) {
+  const size_t length = text_length(line);
+  if (length < 2u || line[length - 1u] != 'E') {
+    return false;
+  }
+
+  controller_mark_ascii_activity();
+
+  if (line[0] == 'S' && length == 8u) {
+    uint16_t x_target = 0u;
+    uint16_t y_target = 0u;
+    if (!parse_fixed_u16(line, 1u, 3u, &x_target) || !parse_fixed_u16(line, 4u, 3u, &y_target)) {
+      uart3_write_line("error:bad_move_frame");
+      return true;
+    }
+    if (!g_controller.outputs_enabled) {
+      uart3_write_line("error:motors_disabled");
+      return true;
+    }
+    controller_apply_move((int32_t)x_target, true, (int32_t)y_target, true, g_controller.default_rate_hz);
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'A' && length == 3u && (line[1] == '0' || line[1] == '1')) {
+    g_controller.fault_bits &= ~FAULT_WATCHDOG_EXPIRED;
+    controller_enable_outputs(line[1] == '1');
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'M' && length == 3u && (line[1] == '0' || line[1] == '1')) {
+    g_controller.relative_mode = line[1] == '1';
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'R' && length == 5u) {
+    uint16_t rate = 0u;
+    if (!parse_fixed_u16(line, 1u, 3u, &rate) || rate == 0u) {
+      uart3_write_line("error:bad_rate");
+      return true;
+    }
+    g_controller.default_rate_hz = rate;
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'H' && length == 4u && (line[1] == '0' || line[1] == '1') && (line[2] == '0' || line[2] == '1')) {
+    if (!g_controller.outputs_enabled) {
+      uart3_write_line("error:motors_disabled");
+      return true;
+    }
+    controller_schedule_home(line[1] == '1', line[2] == '1');
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'Z' && length == 4u && (line[1] == '0' || line[1] == '1') && (line[2] == '0' || line[2] == '1')) {
+    controller_zero_axes(line[1] == '1', line[2] == '1');
+    uart3_write_line("ok");
+    return true;
+  }
+
+  if (line[0] == 'Q' && length == 3u) {
+    controller_publish_status_text();
+    return true;
+  }
+
+  if (line[0] == 'L' && length == 3u) {
+    controller_publish_limit_text();
+    return true;
+  }
+
+  if (line[0] == 'B' && length == 3u) {
+    controller_publish_board_info_text();
+    return true;
+  }
+
+  return false;
+}
+
+static bool compact_opcode_char(char value) {
+  return value == 'S' || value == 'A' || value == 'M' || value == 'R'
+      || value == 'H' || value == 'Q' || value == 'L' || value == 'B'
+      || value == 'Z';
+}
+
 static void controller_process_ascii_command(const char *line) {
   if (line[0] == '\0') {
+    return;
+  }
+
+  if (controller_process_compact_command(line)) {
     return;
   }
 
@@ -584,6 +803,28 @@ static void controller_step_axis(axis_state_t *axis) {
     return;
   }
 
+  if (axis->mode == ENDER_STEPPER_HOME_TO_LIMIT) {
+    const bool limit_hit = axis == &g_controller.axis_1 ? controller_x_limit_triggered() : controller_y_limit_triggered();
+    if (limit_hit) {
+      axis->position_steps = 0;
+      axis->target_steps = 0;
+      axis->mode = ENDER_STEPPER_HOLD;
+      return;
+    }
+
+    const uint32_t now_us = micros_now();
+    if ((now_us - axis->last_step_time_us) < axis->step_interval_us) {
+      return;
+    }
+
+    const bool direction_positive = axis->homing_direction > 0;
+    gpio_write(axis->dir_port, axis->dir_pin, direction_positive);
+    controller_pulse_step(axis);
+    axis->position_steps += direction_positive ? 1 : -1;
+    axis->last_step_time_us = now_us;
+    return;
+  }
+
   if (axis->position_steps == axis->target_steps) {
     if (axis->mode == ENDER_STEPPER_POSITION) {
       axis->mode = ENDER_STEPPER_HOLD;
@@ -604,8 +845,11 @@ static void controller_step_axis(axis_state_t *axis) {
 }
 
 static bool controller_axes_idle(void) {
-  return g_controller.axis_1.position_steps == g_controller.axis_1.target_steps
+  const bool axis_1_idle = g_controller.axis_1.mode != ENDER_STEPPER_HOME_TO_LIMIT
+      && g_controller.axis_1.position_steps == g_controller.axis_1.target_steps;
+  const bool axis_2_idle = g_controller.axis_2.mode != ENDER_STEPPER_HOME_TO_LIMIT
       && g_controller.axis_2.position_steps == g_controller.axis_2.target_steps;
+  return axis_1_idle && axis_2_idle;
 }
 
 static void controller_run_until_idle_or_timeout(uint32_t timeout_ms) {
@@ -694,6 +938,11 @@ static void controller_poll_uart(void) {
 
     if (g_ascii_line_len + 1u < ASCII_LINE_MAX) {
       g_ascii_line[g_ascii_line_len++] = (char)value;
+      if (value == 'E' && g_ascii_line_len >= 2u && compact_opcode_char(g_ascii_line[0])) {
+        g_ascii_line[g_ascii_line_len] = '\0';
+        controller_process_ascii_command(g_ascii_line);
+        g_ascii_line_len = 0u;
+      }
     } else {
       g_ascii_line_len = 0u;
     }
@@ -745,6 +994,8 @@ static void gpio_init(void) {
   gpio_config_output(GPIOB, Y_STEP_PIN);
   gpio_config_output(GPIOB, Y_DIR_PIN);
   gpio_config_output(GPIOC, XY_ENABLE_PIN);
+  gpio_config_input_pullup(GPIOA, X_STOP_PIN);
+  gpio_config_input_pullup(GPIOA, Y_STOP_PIN);
   gpio_config_alt_pushpull(GPIOB, UART_TX_PIN);
   gpio_config_input_floating(GPIOB, UART_RX_PIN);
 
@@ -770,6 +1021,7 @@ static void controller_init(void) {
   g_controller.axis_1.dir_port = GPIOB;
   g_controller.axis_1.dir_pin = X_DIR_PIN;
   g_controller.axis_1.step_interval_us = 1000000u / DEFAULT_RATE_HZ;
+  g_controller.axis_1.homing_direction = -1;
   g_controller.axis_1.mode = ENDER_STEPPER_HOLD;
 
   g_controller.axis_2.step_port = GPIOB;
@@ -777,8 +1029,11 @@ static void controller_init(void) {
   g_controller.axis_2.dir_port = GPIOB;
   g_controller.axis_2.dir_pin = Y_DIR_PIN;
   g_controller.axis_2.step_interval_us = 1000000u / DEFAULT_RATE_HZ;
+  g_controller.axis_2.homing_direction = -1;
   g_controller.axis_2.mode = ENDER_STEPPER_HOLD;
 
+  g_controller.default_rate_hz = DEFAULT_RATE_HZ;
+  g_controller.homing_rate_hz = DEFAULT_HOMING_RATE_HZ;
   g_controller.latest_command.watchdog_timeout_ms = ASCII_WATCHDOG_TIMEOUT_MS;
   g_controller.last_command_ms = millis_now();
   g_controller.last_status_ms = millis_now();

@@ -4,7 +4,7 @@ from std_msgs.msg import Float32, String
 
 
 class LegControllerNode(Node):
-    """Placeholder leg controller for one leg (L0–L3)."""
+    """Placeholder leg controller for one leg (L0-L3)."""
 
     def __init__(self) -> None:
         super().__init__("leg_controller")
@@ -12,11 +12,10 @@ class LegControllerNode(Node):
         self.declare_parameter("leg_id", "L0")
         self.leg_id = self.get_parameter("leg_id").get_parameter_value().string_value
 
-        # Inputs from motion executor
-        self.create_subscription(Float32, "executor/leg_target_velocity", self._on_target_velocity, 10)
-        self.create_subscription(Float32, "executor/leg_target_turn_rate", self._on_target_turn_rate, 10)
+        # Use absolute topics so namespaced leg nodes still receive the shared executor outputs.
+        self.create_subscription(Float32, "/executor/leg_target_velocity", self._on_target_velocity, 10)
+        self.create_subscription(Float32, "/executor/leg_target_turn_rate", self._on_target_turn_rate, 10)
 
-        # Simple status publisher
         self.status_pub = self.create_publisher(String, "leg/status", 10)
         self.timer = self.create_timer(0.5, self._on_timer)
 
@@ -49,5 +48,3 @@ def main(args=None) -> None:
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
-

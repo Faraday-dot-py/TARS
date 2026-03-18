@@ -1,4 +1,4 @@
-"""MicroPython Pico W UDP/UART bridge for Thonny upload.
+"""MicroPython Pico W UDP/UART bridge for the compact Ender command set.
 
 Save this file to the Pico W as ``main.py``.
 """
@@ -17,6 +17,8 @@ UART_BAUD = 115200
 UART_TX_PIN = 4
 UART_RX_PIN = 5
 POLL_DELAY_S = 0.001
+
+COMPACT_OPCODES = ("S", "A", "M", "R", "H", "Q", "L", "B", "Z")
 
 
 uart = UART(UART_ID, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN))
@@ -64,6 +66,100 @@ def reply_udp(message):
     sock.sendto(message, last_remote)
 
 
+def send_uart_command(command):
+    uart.write(command)
+    if not command.endswith("\n"):
+        uart.write("\n")
+    print("Sent to Ender:", command)
+
+
+def zero_pad(value):
+    value = int(value)
+    if value < 0:
+        value = 0
+    if value > 999:
+        value = 999
+    return "{:03d}".format(value)
+
+
+def axis_mask(token):
+    token = token.upper()
+    if token in ("X", "INNER"):
+        return "10"
+    if token in ("Y", "OUTER"):
+        return "01"
+    if token in ("XY", "BOTH"):
+        return "11"
+    return None
+
+
+def build_compact_command(message):
+    raw = message.strip()
+    upper = raw.upper()
+    if not raw:
+        return None
+
+    if raw[0] in COMPACT_OPCODES and raw.endswith("E"):
+        return raw
+
+    if upper.startswith("M") or upper.startswith("G"):
+        return raw
+
+    parts = upper.split()
+    if not parts:
+        return None
+
+    if parts[0] == "ENABLE":
+        return "A1E"
+    if parts[0] in ("DISABLE", "STOP"):
+        return "A0E"
+    if parts[0] == "STATUS":
+        return "Q0E"
+    if parts[0] == "BOARD":
+        return "B0E"
+    if parts[0] == "LIMITS":
+        return "L0E"
+
+    if parts[0] == "MODE" and len(parts) == 2:
+        if parts[1] == "ABS":
+            return "M0E"
+        if parts[1] == "REL":
+            return "M1E"
+        return None
+
+    if parts[0] == "RATE" and len(parts) == 2:
+        try:
+            return "R{}E".format(zero_pad(int(float(parts[1]))))
+        except ValueError:
+            return None
+
+    if parts[0] == "MOVE" and len(parts) == 3:
+        try:
+            return "S{}{}E".format(zero_pad(int(float(parts[1]))), zero_pad(int(float(parts[2]))))
+        except ValueError:
+            return None
+
+    if len(parts) == 4 and parts[0] == "INNER" and parts[2] == "OUTER":
+        try:
+            return "S{}{}E".format(zero_pad(int(float(parts[1]))), zero_pad(int(float(parts[3]))))
+        except ValueError:
+            return None
+
+    if parts[0] == "HOME" and len(parts) == 2:
+        mask = axis_mask(parts[1])
+        if mask is None:
+            return None
+        return "H{}E".format(mask)
+
+    if parts[0] == "ZERO" and len(parts) == 2:
+        mask = axis_mask(parts[1])
+        if mask is None:
+            return None
+        return "Z{}E".format(mask)
+
+    return None
+
+
 def handle_udp_packet():
     global last_remote
     try:
@@ -80,8 +176,12 @@ def handle_udp_packet():
         reply_udp("PICO:PONG\n")
         return
 
-    uart.write(message)
-    uart.write("\n")
+    command = build_compact_command(message)
+    if command is None:
+        reply_udp("ERR BAD_CMD\n")
+        return
+
+    send_uart_command(command)
 
 
 def handle_uart_input():
@@ -105,7 +205,7 @@ def handle_uart_input():
 
 
 def main():
-    print("Starting TARS Pico W MicroPython UDP/UART bridge")
+    print("Starting TARS Pico W compact UDP/UART bridge")
     print("UART{} baud={} tx=GP{} rx=GP{}".format(UART_ID, UART_BAUD, UART_TX_PIN, UART_RX_PIN))
     connect_wifi()
     start_udp_socket()

@@ -10,6 +10,7 @@
   <depend>robot_controller</depend>
   <depend>motion</depend>
   <depend>leg_control</depend>
+  <depend>pico_leg_bridge</depend>
   <depend>state_estimation</depend>
   <depend>b0_interface</depend>
 
@@ -17,4 +18,3 @@
     <build_type>ament_python</build_type>
   </export>
 </package>
-
