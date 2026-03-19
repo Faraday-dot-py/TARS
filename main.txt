@@ -474,7 +474,6 @@ def main():
         print("Ready. Pico IP is {}.".format(wifi.ifconfig()[0]))
     else:
         print("Initial Wi-Fi connect failed; will keep retrying.")
-    set_servo_angle(90)
     while True:
         ensure_wifi()
         handle_udp_packet()
