@@ -1,0 +1,490 @@
+from machine import Pin, UART, PWM, SoftI2C
+import network
+import socket
+import time
+
+WIFI_SSID = "SAMB0"
+WIFI_PASSWORD = None
+
+UDP_PORT = 5005
+REPLY_IP = "10.42.0.1"
+REPLY_PORT = 5010
+
+IMU_IP = "10.42.0.1"
+IMU_PORT = 5011
+IMU_SEND_INTERVAL_MS = 50
+
+UART_ID = 1
+UART_BAUD = 115200
+UART_TX_PIN = 4
+UART_RX_PIN = 5
+PAD_WIDTH = 3
+
+SERVO_PIN = 22
+SERVO_MIN_US = 500
+SERVO_MAX_US = 2500
+SERVO_FREQ = 50
+
+I2C_SCL_PIN = 26
+I2C_SDA_PIN = 27
+I2C_FREQ = 400000
+
+MPU_REG_PWR_MGMT_1 = 0x6B
+MPU_REG_SMPLRT_DIV = 0x19
+MPU_REG_CONFIG = 0x1A
+MPU_REG_GYRO_CONFIG = 0x1B
+MPU_REG_ACCEL_CONFIG = 0x1C
+MPU_REG_ACCEL_XOUT_H = 0x3B
+MPU_REG_WHO_AM_I = 0x75
+
+ACCEL_SCALE = 16384.0
+GYRO_SCALE = 131.0
+
+POLL_DELAY_S = 0.001
+WIFI_CONNECT_TIMEOUT_MS = 10000
+WIFI_RETRY_INTERVAL_MS = 5000
+
+uart = UART(UART_ID, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN))
+servo = PWM(Pin(SERVO_PIN))
+servo.freq(SERVO_FREQ)
+wifi = network.WLAN(network.STA_IF)
+i2c = SoftI2C(scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=I2C_FREQ)
+
+sock = None
+last_remote = None
+uart_line = bytearray()
+last_wifi_retry_ms = 0
+last_imu_send_ms = 0
+imu_seq = 0
+MPU_ADDRS = []
+
+
+def set_servo_angle(angle_deg):
+    angle_deg = int(angle_deg)
+    if angle_deg < 0:
+        angle_deg = 0
+    if angle_deg > 180:
+        angle_deg = 180
+    pulse_us = SERVO_MIN_US + (SERVO_MAX_US - SERVO_MIN_US) * angle_deg // 180
+    duty_u16 = pulse_us * 65535 // 20000
+    servo.duty_u16(duty_u16)
+
+
+def connect_wifi(timeout_ms=WIFI_CONNECT_TIMEOUT_MS):
+    wifi.active(True)
+    if wifi.isconnected():
+        print("Pico W Wi-Fi connected:", wifi.ifconfig())
+        return True
+    print("Connecting to Wi-Fi SSID '{}'".format(WIFI_SSID))
+    try:
+        wifi.disconnect()
+    except Exception:
+        pass
+    if WIFI_PASSWORD:
+        wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+    else:
+        wifi.connect(WIFI_SSID)
+    deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
+    while not wifi.isconnected():
+        if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+            print("Timed out connecting to Wi-Fi '{}'".format(WIFI_SSID))
+            return False
+        time.sleep(0.1)
+    print("Pico W Wi-Fi connected:", wifi.ifconfig())
+    return True
+
+
+def ensure_wifi():
+    global last_wifi_retry_ms, sock
+    if wifi.isconnected():
+        return
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_wifi_retry_ms) < WIFI_RETRY_INTERVAL_MS:
+        return
+    last_wifi_retry_ms = now
+    print("Wi-Fi disconnected, attempting reconnect...")
+    if connect_wifi():
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            sock = None
+        start_udp_socket()
+
+
+def start_udp_socket():
+    global sock
+    if sock is not None:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        sock = None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(False)
+    sock.bind(("0.0.0.0", UDP_PORT))
+    print("UDP bridge listening on port", UDP_PORT)
+
+
+def reply_udp(message):
+    if sock is None:
+        return
+    if isinstance(message, str):
+        message = message.encode("utf-8")
+    try:
+        sock.sendto(message, (REPLY_IP, REPLY_PORT))
+    except OSError as e:
+        print("UDP reply failed:", e)
+
+
+def send_uart_line(line):
+    try:
+        uart.write(line)
+        uart.write("\n")
+        print("Sent to Ender:", line)
+    except OSError as e:
+        print("UART write failed:", e)
+        reply_udp("ERR UART_WRITE\n")
+
+
+def zero_pad(value, width):
+    n = int(value)
+    if n < 0:
+        raise ValueError("negative values not supported in compact S command")
+    s = str(n)
+    if len(s) >= width:
+        return s
+    return ("0" * (width - len(s))) + s
+
+
+def parse_three_actuator_command(message):
+    parts = message.strip().split()
+    if len(parts) != 6:
+        return None
+    if parts[0].upper() != "INNER":
+        return None
+    if parts[2].upper() != "OUTER":
+        return None
+    if parts[4].upper() != "SERVO":
+        return None
+    try:
+        inner_val = int(round(float(parts[1])))
+        outer_val = int(round(float(parts[3])))
+        servo_val = int(round(float(parts[5])))
+    except ValueError:
+        return None
+    return inner_val, outer_val, servo_val
+
+
+def parse_json_style_move(message):
+    compact = message.replace(" ", "")
+    if '"inner":' not in compact.lower():
+        return None
+    try:
+        lower = compact.lower()
+        leg_pos = lower.find('"leg_id":"')
+        inner_pos = lower.find('"inner":')
+        outer_pos = lower.find('"outer":')
+        servo_pos = lower.find('"servo":')
+        if inner_pos == -1 or outer_pos == -1 or servo_pos == -1:
+            return None
+
+        def extract_num(src, start_idx):
+            i = start_idx
+            chars = []
+            while i < len(src) and src[i] in "-0123456789.":
+                chars.append(src[i])
+                i += 1
+            if not chars:
+                raise ValueError
+            return int(round(float("".join(chars))))
+
+        leg_id = None
+        if leg_pos != -1:
+            leg_start = leg_pos + len('"leg_id":"')
+            leg_end = compact.find('"', leg_start)
+            if leg_end != -1:
+                leg_id = compact[leg_start:leg_end]
+
+        inner_val = extract_num(compact, inner_pos + len('"inner":'))
+        outer_val = extract_num(compact, outer_pos + len('"outer":'))
+        servo_val = extract_num(compact, servo_pos + len('"servo":'))
+        return leg_id, inner_val, outer_val, servo_val
+    except Exception:
+        return None
+
+
+def scan_i2c_bus():
+    global MPU_ADDRS
+    try:
+        addrs = i2c.scan()
+        print("I2C devices found:", [hex(a) for a in addrs])
+        MPU_ADDRS = [a for a in addrs if a in (0x68, 0x69)]
+        print("MPU-6050 addresses:", [hex(a) for a in MPU_ADDRS])
+    except Exception as e:
+        MPU_ADDRS = []
+        print("I2C scan failed:", e)
+
+
+def init_one_mpu(addr):
+    i2c.writeto_mem(addr, MPU_REG_PWR_MGMT_1, b"\x00")
+    time.sleep_ms(100)
+    i2c.writeto_mem(addr, MPU_REG_SMPLRT_DIV, b"\x07")
+    i2c.writeto_mem(addr, MPU_REG_CONFIG, b"\x06")
+    i2c.writeto_mem(addr, MPU_REG_GYRO_CONFIG, b"\x00")
+    i2c.writeto_mem(addr, MPU_REG_ACCEL_CONFIG, b"\x00")
+    who = i2c.readfrom_mem(addr, MPU_REG_WHO_AM_I, 1)[0]
+    print("MPU at {} WHO_AM_I=0x{:02X}".format(hex(addr), who))
+
+
+def init_imus():
+    if not MPU_ADDRS:
+        print("No MPU-6050 devices found on I2C bus")
+        return
+    for addr in MPU_ADDRS:
+        try:
+            init_one_mpu(addr)
+        except Exception as e:
+            print("MPU init failed at {}: {}".format(hex(addr), e))
+
+
+def read_one_mpu(addr):
+    data = i2c.readfrom_mem(addr, MPU_REG_ACCEL_XOUT_H, 14)
+
+    def to_i16(msb, lsb):
+        value = (msb << 8) | lsb
+        if value & 0x8000:
+            value -= 65536
+        return value
+
+    ax_raw = to_i16(data[0], data[1])
+    ay_raw = to_i16(data[2], data[3])
+    az_raw = to_i16(data[4], data[5])
+    gx_raw = to_i16(data[8], data[9])
+    gy_raw = to_i16(data[10], data[11])
+    gz_raw = to_i16(data[12], data[13])
+
+    ax = ax_raw / ACCEL_SCALE
+    ay = ay_raw / ACCEL_SCALE
+    az = az_raw / ACCEL_SCALE
+    gx = gx_raw / GYRO_SCALE
+    gy = gy_raw / GYRO_SCALE
+    gz = gz_raw / GYRO_SCALE
+    return (ax, ay, az, gx, gy, gz)
+
+
+def read_all_imus():
+    imu_values = []
+    for addr in MPU_ADDRS[:3]:
+        try:
+            imu_values.append(read_one_mpu(addr))
+        except Exception as e:
+            print("MPU read failed at {}: {}".format(hex(addr), e))
+            imu_values.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    while len(imu_values) < 3:
+        imu_values.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    return imu_values[0], imu_values[1], imu_values[2]
+
+
+def send_imu_packet(imu1, imu2, imu3):
+    global imu_seq
+    if sock is None:
+        return
+    imu_seq += 1
+    msg = (
+        "IMU,{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},"
+        "{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},"
+        "{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}"
+    ).format(
+        imu_seq,
+        imu1[0], imu1[1], imu1[2], imu1[3], imu1[4], imu1[5],
+        imu2[0], imu2[1], imu2[2], imu2[3], imu2[4], imu2[5],
+        imu3[0], imu3[1], imu3[2], imu3[3], imu3[4], imu3[5]
+    )
+    try:
+        sock.sendto(msg.encode("utf-8"), (IMU_IP, IMU_PORT))
+    except OSError as e:
+        print("IMU send failed:", e)
+
+
+def maybe_send_imu():
+    global last_imu_send_ms
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_imu_send_ms) < IMU_SEND_INTERVAL_MS:
+        return
+    last_imu_send_ms = now
+    imu1, imu2, imu3 = read_all_imus()
+    send_imu_packet(imu1, imu2, imu3)
+
+
+def handle_move(inner_val, outer_val, servo_val, leg_id=None):
+    if inner_val < 0 or outer_val < 0:
+        reply_udp("ERR NEGATIVE_NOT_SUPPORTED\n")
+        return
+
+    if servo_val < 0:
+        servo_val = 0
+    if servo_val > 180:
+        servo_val = 180
+
+    status_msg = "Moving : Inside: {}, Outside: {}, servo: {}".format(
+        inner_val, outer_val, servo_val
+    )
+    if leg_id is not None:
+        status_msg = "leg {} ".format(leg_id) + status_msg
+
+    print(status_msg)
+    reply_udp(status_msg + "\n")
+
+    try:
+        inner_str = zero_pad(inner_val, PAD_WIDTH)
+        outer_str = zero_pad(outer_val, PAD_WIDTH)
+    except ValueError:
+        reply_udp("ERR BAD_MOVE\n")
+        return
+
+    send_uart_line("S{},{}E".format(inner_str, outer_str))
+    set_servo_angle(servo_val)
+
+
+def handle_udp_packet():
+    global last_remote
+    if sock is None:
+        return
+    try:
+        packet, remote = sock.recvfrom(512)
+    except OSError:
+        return
+
+    last_remote = remote
+    message = packet.decode("utf-8", "replace").strip()
+    if not message:
+        return
+
+    print("Got incoming message {}".format(message))
+    upper = message.upper()
+
+    if upper == "PING":
+        reply_udp("PICO:PONG\n")
+        return
+
+    if upper == "ENABLE":
+        send_uart_line("A1E")
+        reply_udp("RAW_SENT A1E\n")
+        return
+
+    if upper == "DISABLE":
+        send_uart_line("A0E")
+        reply_udp("RAW_SENT A0E\n")
+        return
+
+    if upper == "QUERY":
+        send_uart_line("Q0E")
+        reply_udp("RAW_SENT Q0E\n")
+        return
+
+    if upper == "HOME":
+        send_uart_line("H11E")
+        reply_udp("RAW_SENT H11E\n")
+        return
+
+    if upper.startswith("RATE "):
+        rate_str = message[5:].strip()
+        try:
+            rate_val = int(round(float(rate_str)))
+            if rate_val < 0:
+                raise ValueError
+            send_uart_line("R{}E".format(rate_val))
+            reply_udp("RAW_SENT R{}E\n".format(rate_val))
+        except Exception:
+            reply_udp("ERR BAD_RATE\n")
+        return
+
+    if upper.startswith("SERVO "):
+        servo_str = message[6:].strip()
+        try:
+            servo_val = int(round(float(servo_str)))
+            set_servo_angle(servo_val)
+            reply_udp("SERVO {}\n".format(servo_val))
+        except Exception:
+            reply_udp("ERR BAD_SERVO\n")
+        return
+
+    if upper.startswith("RAW "):
+        raw_cmd = message[4:].strip()
+        if not raw_cmd:
+            reply_udp("ERR EMPTY_RAW\n")
+            return
+        send_uart_line(raw_cmd)
+        reply_udp("RAW_SENT {}\n".format(raw_cmd))
+        return
+
+    parsed = parse_three_actuator_command(message)
+    if parsed is not None:
+        inner_val, outer_val, servo_val = parsed
+        handle_move(inner_val, outer_val, servo_val)
+        return
+
+    json_move = parse_json_style_move(message)
+    if json_move is not None:
+        leg_id, inner_val, outer_val, servo_val = json_move
+        handle_move(inner_val, outer_val, servo_val, leg_id)
+        return
+
+    reply_udp("ERR BAD_CMD\n")
+
+
+def handle_uart_input():
+    global uart_line
+    data = uart.read()
+    if not data:
+        return
+    for byte in data:
+        if byte == 13:
+            continue
+        if byte == 10:
+            if uart_line:
+                try:
+                    line = bytes(uart_line).decode("utf-8", "replace")
+                except Exception:
+                    line = str(bytes(uart_line))
+                print("Got uart line: {}".format(line))
+                reply_udp(line + "\n")
+            uart_line = bytearray()
+            continue
+        if len(uart_line) < 255:
+            uart_line.append(byte)
+        else:
+            uart_line = bytearray()
+
+
+def main():
+    print("Starting Pico W UDP/UART bridge")
+    print("UART{} baud={} tx=GP{} rx=GP{}".format(UART_ID, UART_BAUD, UART_TX_PIN, UART_RX_PIN))
+    print("Servo on GP{}".format(SERVO_PIN))
+    print("Commands on UDP port {}".format(UDP_PORT))
+    print("Replies go to {}:{}".format(REPLY_IP, REPLY_PORT))
+    print("IMU telemetry goes to {}:{}".format(IMU_IP, IMU_PORT))
+    print("I2C on SCL=GP{} SDA=GP{}".format(I2C_SCL_PIN, I2C_SDA_PIN))
+    scan_i2c_bus()
+    init_imus()
+    if connect_wifi():
+        start_udp_socket()
+        print("Ready. Pico IP is {}.".format(wifi.ifconfig()[0]))
+    else:
+        print("Initial Wi-Fi connect failed; will keep retrying.")
+    set_servo_angle(90)
+    while True:
+        ensure_wifi()
+        handle_udp_packet()
+        handle_uart_input()
+        maybe_send_imu()
+        time.sleep(POLL_DELAY_S)
+
+
+try:
+    send_uart_line("A1E")
+    main()
+except Exception as e:
+    print("FATAL ERROR:", e)
