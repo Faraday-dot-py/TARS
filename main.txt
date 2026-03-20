@@ -29,6 +29,9 @@ I2C_SCL_PIN = 26
 I2C_SDA_PIN = 27
 I2C_FREQ = 400000
 
+MPU_ADDR_1 = 0x68
+MPU_ADDR_2 = 0x69
+
 MPU_REG_PWR_MGMT_1 = 0x6B
 MPU_REG_SMPLRT_DIV = 0x19
 MPU_REG_CONFIG = 0x1A
@@ -220,8 +223,12 @@ def scan_i2c_bus():
     try:
         addrs = i2c.scan()
         print("I2C devices found:", [hex(a) for a in addrs])
-        MPU_ADDRS = [a for a in addrs if a in (0x68, 0x69)]
-        print("MPU-6050 addresses:", [hex(a) for a in MPU_ADDRS])
+        MPU_ADDRS = []
+        if MPU_ADDR_1 in addrs:
+            MPU_ADDRS.append(MPU_ADDR_1)
+        if MPU_ADDR_2 in addrs:
+            MPU_ADDRS.append(MPU_ADDR_2)
+        print("Using MPU addresses:", [hex(a) for a in MPU_ADDRS])
     except Exception as e:
         MPU_ADDRS = []
         print("I2C scan failed:", e)
@@ -274,48 +281,44 @@ def read_one_mpu(addr):
     return (ax, ay, az, gx, gy, gz)
 
 
-def read_all_imus():
-    imu_values = []
-    for addr in MPU_ADDRS[:3]:
-        try:
-            imu_values.append(read_one_mpu(addr))
-        except Exception as e:
-            print("MPU read failed at {}: {}".format(hex(addr), e))
-            imu_values.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-    while len(imu_values) < 3:
-        imu_values.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-    return imu_values[0], imu_values[1], imu_values[2]
-
-
-def send_imu_packet(imu1, imu2, imu3):
-    global imu_seq
+def send_imu_packet():
     if sock is None:
         return
-    imu_seq += 1
+
+    imu1 = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    imu2 = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    if MPU_ADDR_1 in MPU_ADDRS:
+        try:
+            imu1 = read_one_mpu(MPU_ADDR_1)
+        except Exception as e:
+            print("MPU read failed at {}: {}".format(hex(MPU_ADDR_1), e))
+
+    if MPU_ADDR_2 in MPU_ADDRS:
+        try:
+            imu2 = read_one_mpu(MPU_ADDR_2)
+        except Exception as e:
+            print("MPU read failed at {}: {}".format(hex(MPU_ADDR_2), e))
+
     msg = (
-        "IMU,{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},"
-        "{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},"
-        "{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}"
+        "IMU,0x68,{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}\n"
+        "IMU,0x69,{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}\n"
     ).format(
-        imu_seq,
         imu1[0], imu1[1], imu1[2], imu1[3], imu1[4], imu1[5],
-        imu2[0], imu2[1], imu2[2], imu2[3], imu2[4], imu2[5],
-        imu3[0], imu3[1], imu3[2], imu3[3], imu3[4], imu3[5]
+        imu2[0], imu2[1], imu2[2], imu2[3], imu2[4], imu2[5]
     )
+
     try:
         sock.sendto(msg.encode("utf-8"), (IMU_IP, IMU_PORT))
     except OSError as e:
         print("IMU send failed:", e)
-
-
 def maybe_send_imu():
     global last_imu_send_ms
     now = time.ticks_ms()
     if time.ticks_diff(now, last_imu_send_ms) < IMU_SEND_INTERVAL_MS:
         return
     last_imu_send_ms = now
-    imu1, imu2, imu3 = read_all_imus()
-    send_imu_packet(imu1, imu2, imu3)
+    send_imu_packet()
 
 
 def handle_move(inner_val, outer_val, servo_val, leg_id=None):
