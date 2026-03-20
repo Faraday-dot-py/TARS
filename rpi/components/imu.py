@@ -1,6 +1,7 @@
 from mpu6050 import MPU6050
 import numpy as np
 from ahrs.filters import Madgwick
+from tca9548a import TCA9548A
 
 class FakeMPU6050:
     def read_accel_g(self):
@@ -10,16 +11,21 @@ class FakeMPU6050:
 
 
 class IMU:
-    def __init__(self, sensor_id: int, address: int, sample_rate: int = 50, beta: float = 0.033):
+    def __init__(self, sensor_id: int, channel: int, mux: TCA9548A, address: int, sample_rate: int = 50, beta: float = 0.033):
         """
         :param sensor_id: logical ID for this sensor (0-5) out of six sensors
-        :param address:   I2C address — 0x68 or 0x69 (set via AD0 pin)
+        :param channel:   I2C channel on the multiplexer (0–7)
+        :param mux:       TCA9548A multiplexer instance
+        :param address:   I2C address — 0x68 or 0x69 for real sensors, 0 for fake sensor that returns static data
         :param sample_rate: Hz, must match imu_pub.py — 50Hz is the default 
         :param beta: Madgwick gain — 0.033 is 6-axis default
         """
         self.sensor_id   = sensor_id
+        self.channel     = channel
         self.sample_rate = sample_rate
+        self._mux         = mux
 
+        # All sensors can share 0x68 because the mux isolates them
         self._sensor = FakeMPU6050() if address == 0 else MPU6050(address)
         self._filter = Madgwick(frequency=sample_rate, beta=beta)
 
@@ -30,6 +36,9 @@ class IMU:
         self.w, self.x, self.y, self.z = 1.0, 0.0, 0.0, 0.0
 
     def update(self):
+        # Select this sensor's channel before reading
+        self._mux.select(self.channel)
+
         accel = self._sensor.read_accel_g()
         gyro  = self._sensor.read_gyro_dps()
 
@@ -47,7 +56,8 @@ class IMU:
 if __name__ == "__main__":
     id = 1
     address = 0
-    sensor_guy = IMU(id, address)
+    channel = 0
+    sensor_guy = IMU(sensor_id=id, address=address, channel=channel, mux=TCA9548A())
     for _ in range(100):
         sensor_guy.update()
     print(sensor_guy.packet())

@@ -1,18 +1,22 @@
 import socket
 import time
 from imu import IMU
+from tca9548a import TCA9548A
 
 JETSON_IP = "10.42.0.1"
 UDP_PORT  = 5005
 RATE      = 50
 INTERVAL  = 1.0 / RATE
 
-# AD0 low = 0x68, AD0 high = 0x69
-# For more than 2 sensors on one bus you need a TCA9548A multiplexer
+mux = TCA9548A(bus=1, address=0x70)
+
 sensors = [
-    IMU(sensor_id=0, address=0x68),
-    IMU(sensor_id=1, address=0x69),
-    # IMU(sensor_id=2, address=0x68, mux_channel=2),  # expand when mux is wired
+    IMU(sensor_id=0, channel=0, mux=mux),
+    IMU(sensor_id=1, channel=1, mux=mux),
+    IMU(sensor_id=2, channel=2, mux=mux),
+    IMU(sensor_id=3, channel=3, mux=mux),
+    IMU(sensor_id=4, channel=4, mux=mux),
+    IMU(sensor_id=5, channel=5, mux=mux),
 ]
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -29,4 +33,5 @@ try:
         time.sleep(max(0, next_tick - time.time()))
         last = next_tick
 except KeyboardInterrupt:
+    mux.close_all()
     sock.close()
