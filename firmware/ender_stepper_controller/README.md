@@ -19,7 +19,49 @@
 9. Binary command frames matching `src/ender_stepper_transport` are accepted.
 10. A watchdog timeout disables the shared enable line and reports a fault bit.
 
-## Build
+## Firmware Toolchain
+
+Validated from repo code:
+
+- This firmware is a bare-metal Cortex-M3 build, not PlatformIO, not STM32Cube, and not Marlin.
+- The build is driven by [`Makefile`](/home/faraday/TARS/firmware/ender_stepper_controller/Makefile).
+- The compiler toolchain is `arm-none-eabi-gcc` plus `arm-none-eabi-objcopy` and `arm-none-eabi-size`.
+- The link step uses [`linker.ld`](/home/faraday/TARS/firmware/ender_stepper_controller/linker.ld).
+- Reset and vector-table setup live in [`startup.c`](/home/faraday/TARS/firmware/ender_stepper_controller/src/startup.c).
+- Application logic lives in [`main.c`](/home/faraday/TARS/firmware/ender_stepper_controller/src/main.c).
+
+Build flow:
+
+1. `make` compiles `src/startup.c` and `src/main.c` into `build/*.o`.
+2. The objects are linked into `build/tars_ender_stepper_controller.elf`.
+3. `arm-none-eabi-objcopy` converts that ELF into `build/tars_ender_stepper_controller.bin`.
+4. The build is archived into `artifacts/<build_id>/`.
+5. The same `.bin` is copied to a short flash-ready alias `FW<short_id>.bin` for Creality SD flashing.
+6. `SHA256SUMS.txt` is generated for the archived outputs.
+
+Build metadata:
+
+- `BUILD_ID` defaults to the current timestamp in `YYYYMMDD_HHMMSS` form.
+- That `BUILD_ID` is compiled into the firmware as `TARS_BUILD_ID`.
+- The firmware prints that build ID in the startup banner and board-info response.
+
+Important targets:
+
+- `make` builds the current/default firmware path.
+- `make legacy BUILD_ID=<id>` rebuilds with the legacy timing flags:
+  - `-DTARS_USE_TIM2_MICROS=0`
+  - `-DTARS_STEP_PULSE_NOP_COUNT=1024`
+
+Practical push guidance:
+
+- Source of truth to commit is the firmware source and build files:
+  - [`Makefile`](/home/faraday/TARS/firmware/ender_stepper_controller/Makefile)
+  - [`linker.ld`](/home/faraday/TARS/firmware/ender_stepper_controller/linker.ld)
+  - [`startup.c`](/home/faraday/TARS/firmware/ender_stepper_controller/src/startup.c)
+  - [`main.c`](/home/faraday/TARS/firmware/ender_stepper_controller/src/main.c)
+  - [`ender_stepper_controller_contract.h`](/home/faraday/TARS/firmware/ender_stepper_controller/include/ender_stepper_controller_contract.h)
+- `build/` is transient.
+- `artifacts/` preserves flash history; keep or ignore it based on how you want to manage release binaries in the firmware repo.
 
 ```bash
 cd firmware/ender_stepper_controller
@@ -32,18 +74,18 @@ This produces:
 - `build/tars_ender_stepper_controller.bin`
 - `artifacts/<build_id>/tars_ender_stepper_controller_<build_id>.elf`
 - `artifacts/<build_id>/tars_ender_stepper_controller_<build_id>.bin`
-- `artifacts/<build_id>/FW<hhmmss>.bin`
+- `artifacts/<build_id>/FW<short_id>.bin`
 - `artifacts/<build_id>/SHA256SUMS.txt`
 
 Each `make` run now:
 
 - injects a unique build ID into the startup banner and board info
 - archives the build into a new `artifacts/<build_id>/` folder so older builds are preserved
-- creates a short flash-ready filename `FW<hhmmss>.bin` for Creality SD flashing
+- creates a short flash-ready filename `FW<short_id>.bin` for Creality SD flashing
 
-Ready-to-flash artifact from this repo state:
+Most recent archived flash artifact in this repo worktree:
 
-- `build/tars_ender_stepper_controller_20260318_fast.bin`
+- [`FWtelemetry.bin`](/home/faraday/TARS/firmware/ender_stepper_controller/artifacts/20260324_telemetry_toggle/FWtelemetry.bin)
 
 ## Current ASCII Validation Commands
 
@@ -91,7 +133,7 @@ Validated from direct hardware inspection:
 
 Suggested first bench sequence:
 
-1. Flash `build/tars_ender_stepper_controller_20260318_fast.bin`.
+1. Flash the short archived image for the build you want to test, for example [`FWtelemetry.bin`](/home/faraday/TARS/firmware/ender_stepper_controller/artifacts/20260324_telemetry_toggle/FWtelemetry.bin).
 2. Keep the LCD unplugged.
 3. Wire the Pico bridge to LCD header UART:
    - Pico `GP4` -> Ender LCD pin 4 (`PB11 RX`)
