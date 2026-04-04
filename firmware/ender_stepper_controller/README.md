@@ -15,8 +15,9 @@
 5. Compact commands like `S050100E` queue motion without using G-code.
 6. `H10E`, `H01E`, and `H11E` home against stock X/Y endstop ports.
 7. `Q0E`, `L0E`, and `B0E` return useful board status and pin mapping information.
-8. Binary command frames matching `src/ender_stepper_transport` are accepted.
-9. A watchdog timeout disables the shared enable line and reports a fault bit.
+8. `T0E` / `T1E` disable / enable the periodic ASCII UART telemetry stream.
+9. Binary command frames matching `src/ender_stepper_transport` are accepted.
+10. A watchdog timeout disables the shared enable line and reports a fault bit.
 
 ## Build
 
@@ -29,10 +30,20 @@ This produces:
 
 - `build/tars_ender_stepper_controller.elf`
 - `build/tars_ender_stepper_controller.bin`
+- `artifacts/<build_id>/tars_ender_stepper_controller_<build_id>.elf`
+- `artifacts/<build_id>/tars_ender_stepper_controller_<build_id>.bin`
+- `artifacts/<build_id>/FW<hhmmss>.bin`
+- `artifacts/<build_id>/SHA256SUMS.txt`
+
+Each `make` run now:
+
+- injects a unique build ID into the startup banner and board info
+- archives the build into a new `artifacts/<build_id>/` folder so older builds are preserved
+- creates a short flash-ready filename `FW<hhmmss>.bin` for Creality SD flashing
 
 Ready-to-flash artifact from this repo state:
 
-- `build/tars_ender_stepper_controller_20260318_compact.bin`
+- `build/tars_ender_stepper_controller_20260318_fast.bin`
 
 ## Current ASCII Validation Commands
 
@@ -46,12 +57,13 @@ Ready-to-flash artifact from this repo state:
 - `G1 X<steps> Y<steps> R<steps_per_second>`
 - `A1E` / `A0E` enable / disable
 - `M0E` / `M1E` absolute / relative compact mode
-- `R<rate>E` set compact move rate, fixed-width 3 digits
-- `S<xxx><yyy>E` queue compact move for X and Y, fixed-width 3 digits each
+- `R<rate>E` set compact move rate with variable-length digits, e.g. `R5000E`
+- `S<x>,<y>E` queue compact move for X and Y using a separator-based frame
 - `H10E` / `H01E` / `H11E` home X / Y / both using stock endstop ports
 - `Q0E` status query
 - `L0E` limit switch query
 - `B0E` board information query
+- `T0E` / `T1E` disable / enable periodic ASCII telemetry
 - `Z10E` / `Z01E` / `Z11E` zero X / Y / both logical positions
 
 Example:
@@ -79,7 +91,7 @@ Validated from direct hardware inspection:
 
 Suggested first bench sequence:
 
-1. Flash `build/tars_ender_stepper_controller_20260317.bin`.
+1. Flash `build/tars_ender_stepper_controller_20260318_fast.bin`.
 2. Keep the LCD unplugged.
 3. Wire the Pico bridge to LCD header UART:
    - Pico `GP4` -> Ender LCD pin 4 (`PB11 RX`)
@@ -92,10 +104,12 @@ Suggested first bench sequence:
 A1E
 Q0E
 R120E
-S050100E
+S50,100E
 Q0E
 L0E
 B0E
+T0E
+T1E
 H11E
 Q0E
 A0E
@@ -106,11 +120,24 @@ Expected behavior:
 - `A1E` returns `ok` and enables the shared driver output.
 - `Q0E` returns current positions, targets, endstop state, enable/safe-stop/fault bits, rate, and axis states.
 - `R120E` returns `ok` and sets the compact move rate to `120` steps per second.
-- `S050100E` returns `ok` and queues X=`50`, Y=`100` in the current compact mode.
+- changing `R...E` while an axis is already in `POSITION` mode updates that active move immediately
+- `S50,100E` returns `ok` and queues X=`50`, Y=`100` in the current compact mode.
 - `L0E` returns `XL:<0|1> YL:<0|1>`.
 - `B0E` returns a board summary including the step, limit, and UART pin mapping.
+- `T0E` returns `ok` and stops the periodic `T,...` carriage telemetry stream.
+- `T1E` returns `ok` and resumes the periodic `T,...` carriage telemetry stream.
 - `H11E` returns `ok` and starts homing both axes toward the stock limit switches.
 - `A0E` returns `ok` and disables the shared driver output.
+
+Continuous telemetry:
+
+- The Ender now streams a carriage telemetry line roughly every `50 ms` over UART when not in binary-protocol mode.
+- Send `T0E` to stop this stream and `T1E` to turn it back on.
+- Format:
+
+```text
+T,<x_pos>,<x_target>,<y_pos>,<y_target>,<enabled>,<safe_stop>,<fault_bits>,<x_limit>,<y_limit>,<rate_hz>,<mode>,<x_state>,<y_state>
+```
 
 ## Binary Protocol
 

@@ -18,7 +18,7 @@ UART_TX_PIN = 4
 UART_RX_PIN = 5
 POLL_DELAY_S = 0.001
 
-COMPACT_OPCODES = ("S", "A", "M", "R", "H", "Q", "L", "B", "Z")
+COMPACT_OPCODES = ("S", "A", "M", "R", "H", "Q", "L", "B", "Z", "T")
 
 
 uart = UART(UART_ID, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN))
@@ -27,6 +27,7 @@ wifi = network.WLAN(network.STA_IF)
 sock = None
 last_remote = None
 uart_line = bytearray()
+uart_telemetry_enabled = True
 
 
 def connect_wifi():
@@ -82,6 +83,17 @@ def zero_pad(value):
     return "{:03d}".format(value)
 
 
+def signed_text(value):
+    return str(int(value))
+
+
+def positive_text(value):
+    value = int(value)
+    if value < 1:
+      value = 1
+    return str(value)
+
+
 def axis_mask(token):
     token = token.upper()
     if token in ("X", "INNER"):
@@ -119,6 +131,12 @@ def build_compact_command(message):
         return "B0E"
     if parts[0] == "LIMITS":
         return "L0E"
+    if parts[0] == "ENDER_TELEMETRY" and len(parts) == 2:
+        if parts[1] == "ON":
+            return "T1E"
+        if parts[1] == "OFF":
+            return "T0E"
+        return None
 
     if parts[0] == "MODE" and len(parts) == 2:
         if parts[1] == "ABS":
@@ -129,19 +147,19 @@ def build_compact_command(message):
 
     if parts[0] == "RATE" and len(parts) == 2:
         try:
-            return "R{}E".format(zero_pad(int(float(parts[1]))))
+            return "R{}E".format(positive_text(float(parts[1])))
         except ValueError:
             return None
 
     if parts[0] == "MOVE" and len(parts) == 3:
         try:
-            return "S{}{}E".format(zero_pad(int(float(parts[1]))), zero_pad(int(float(parts[2]))))
+            return "S{},{}E".format(signed_text(float(parts[1])), signed_text(float(parts[2])))
         except ValueError:
             return None
 
     if len(parts) == 4 and parts[0] == "INNER" and parts[2] == "OUTER":
         try:
-            return "S{}{}E".format(zero_pad(int(float(parts[1]))), zero_pad(int(float(parts[3]))))
+            return "S{},{}E".format(signed_text(float(parts[1])), signed_text(float(parts[3])))
         except ValueError:
             return None
 
@@ -161,7 +179,7 @@ def build_compact_command(message):
 
 
 def handle_udp_packet():
-    global last_remote
+    global last_remote, uart_telemetry_enabled
     try:
         packet, remote = sock.recvfrom(256)
     except OSError:
@@ -174,6 +192,17 @@ def handle_udp_packet():
 
     if message == "PING":
         reply_udp("PICO:PONG\n")
+        return
+
+    upper = message.upper()
+    if upper in ("UART_TELEMETRY ON", "UART TELEMETRY ON"):
+        uart_telemetry_enabled = True
+        reply_udp("UART_TELEMETRY:ON\n")
+        return
+
+    if upper in ("UART_TELEMETRY OFF", "UART TELEMETRY OFF"):
+        uart_telemetry_enabled = False
+        reply_udp("UART_TELEMETRY:OFF\n")
         return
 
     command = build_compact_command(message)
@@ -195,7 +224,13 @@ def handle_uart_input():
             continue
         if byte == 10:
             if uart_line:
-                reply_udp(bytes(uart_line) + b"\n")
+                try:
+                    line = bytes(uart_line).decode("utf-8", "replace")
+                except Exception:
+                    line = str(bytes(uart_line))
+                if uart_telemetry_enabled:
+                    print("Got uart line:", line)
+                    reply_udp(line + "\n")
             uart_line = bytearray()
             continue
         if len(uart_line) < 255:

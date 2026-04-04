@@ -47,7 +47,7 @@ UDP bridge listening on port 15120
 ## Behavior
 
 - `PING` over UDP returns `PICO:PONG`.
-- Compact Ender commands such as `S050100E` are passed straight through over UART.
+- Compact Ender commands such as `S50,100E` are passed straight through over UART.
 - Human-friendly UDP commands are translated to compact Ender commands.
 - Any UART line from the Ender board is returned over UDP to the last sender.
 
@@ -55,14 +55,19 @@ Supported UDP commands:
 
 - `ENABLE` -> `A1E`
 - `DISABLE` -> `A0E`
+- `UART_TELEMETRY ON` -> enable `Got uart line:` console/UDP forwarding
+- `UART_TELEMETRY OFF` -> disable `Got uart line:` console/UDP forwarding
+- `ENDER_TELEMETRY ON` -> `T1E`
+- `ENDER_TELEMETRY OFF` -> `T0E`
 - `STATUS` -> `Q0E`
 - `BOARD` -> `B0E`
 - `LIMITS` -> `L0E`
 - `MODE ABS` -> `M0E`
 - `MODE REL` -> `M1E`
 - `RATE 120` -> `R120E`
-- `MOVE 50 100` -> `S050100E`
-- `INNER 50 OUTER 100` -> `S050100E`
+- `RATE 5000` -> `R5000E`
+- `MOVE 50 100` -> `S50,100E`
+- `INNER 50 OUTER 100` -> `S50,100E`
 - `HOME X` / `HOME Y` / `HOME BOTH` -> `H10E` / `H01E` / `H11E`
 - `ZERO X` / `ZERO Y` / `ZERO BOTH` -> `Z10E` / `Z01E` / `Z11E`
 - raw compact strings like `S050100E`
@@ -85,6 +90,21 @@ Expected:
 - `PING` returns `PICO:PONG`
 - `ENABLE` returns `ok`
 - `STATUS` returns X/Y position and target info plus fault/endstop state
-- `MOVE 050 100` returns `ok` and the Ender should begin stepping
+- `MOVE 50 100` returns `ok` and the Ender should begin stepping
 - `LIMITS` returns the X/Y endstop state
 - `BOARD` returns the Ender firmware pin mapping summary
+- while the Ender is active, you should also see periodic telemetry lines beginning with `T,`
+
+The Pico can also suppress forwarded UART telemetry at runtime:
+
+```bash
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> UART_TELEMETRY\ OFF
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> UART_TELEMETRY\ ON
+```
+
+And the Ender can stop or resume generating the source telemetry stream:
+
+```bash
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> ENDER_TELEMETRY\ OFF
+python3 /home/faraday/TARS/tools/udp_bridge_probe.py --host <pico-ip> ENDER_TELEMETRY\ ON
+```
