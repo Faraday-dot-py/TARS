@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>b0_interface</name>
+  <version>0.0.0</version>
+  <description>Base station (B0) interface.</description>
+  <maintainer email="todo@example.com">TARS Team</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+
